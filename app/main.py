@@ -26,7 +26,7 @@ basedir = os.path.abspath(os.path.dirname(__file__))
 class Configuration(object):
     SECRET_KEY = b'7a\xe1f\x17\xc9C\xcb*\x85\xc1\x95G\x97\x03\xa3D\xd3F\xcf\x03\xf3\x99>'  # noqa
     LIVE_SERVER_PORT = 5000
-    TEST_SERVER_PORT = 5000
+    TEST_SERVER_PORT = 5001
     database_file = os.path.join(basedir, 'db.sqlite')
     SQLALCHEMY_DATABASE_URI = 'sqlite:///' + database_file
     DOMAIN = os.environ.get('FLASK_DOMAIN', 'localhost')
@@ -150,7 +150,6 @@ def give_feedback():
 
 
 # Now for some testing.
-import urllib
 from selenium import webdriver
 from selenium.webdriver.support import expected_conditions
 from selenium.webdriver.common.by import By
@@ -161,108 +160,99 @@ import pytest
 # see below in quit_driver.
 import signal
 
-
-class BasicFunctionalityTests(object):  #pragma: no cover
-    """Basic functionality test. This requires a running server as it does not
-    start one itself. See the 'manage.py' file how this is run.
-    """
-    def start_driver(self):
-        self.driver = webdriver.PhantomJS()
-        self.driver.set_window_size(1120, 550)
-        self.driver.implicitly_wait(5)
-
-    def quit_driver(self):
-        self.driver.close()
+@pytest.fixture(scope="module")
+def driver(request):
+    driver = webdriver.PhantomJS()
+    driver.set_window_size(1120, 550)
+    def finalise():
+        driver.close()
         # A bit of hack this but currently there is some bug I believe in
         # the phantomjs code rather than selenium, but in any case it means that
         # the phantomjs process is not being killed so we do so explicitly here
         # for the time being. Obviously we can remove this when that bug is
         # fixed. See: https://github.com/SeleniumHQ/selenium/issues/767
-        self.driver.service.process.send_signal(signal.SIGTERM)
-        self.driver.quit()
-
-    def get_url(self, local_url):
-        port = application.config['TEST_SERVER_PORT']
-        url = 'http://localhost:{0}'.format(port)
-        return "/".join([url, local_url])
+        driver.service.process.send_signal(signal.SIGTERM)
+        driver.quit()
+    request.addfinalizer(finalise)
+    return driver
 
 
-    def wait_for_element_to_be_clickable(self, selector):
-        wait = WebDriverWait(self.driver, 10)
-        element_spec = (By.CSS_SELECTOR, selector)
-        condition = expected_conditions.element_to_be_clickable(element_spec)
-        element = wait.until(condition)
-        return element
+def get_url(local_url=''):
+    # Obviously this is not the same application instance as the running
+    # server and hence the TEST_SERVER_PORT could in theory be different,
+    # but for testing purposes we just make sure it this is correct.
+    port = application.config['TEST_SERVER_PORT']
+    return 'http://localhost:{}/{}'.format(port, local_url)
 
-    def assertCssSelectorExists(self, css_selector):
-        """ Asserts that there is an element that matches the given
-        css selector."""
-        # We do not actually need to do anything special here, if the
-        # element does not exist we fill fail with a NoSuchElementException
-        # however we wrap this up in a pytest.fail because the error message
-        # is then a bit nicer to read.
-        try:
-            self.driver.find_element_by_css_selector(css_selector)
-        except NoSuchElementException:
-            pytest.fail("Element {0} not found!".format(css_selector))
-
-    def assertCssSelectorNotExists(self, css_selector):
-        """ Asserts that no element that matches the given css selector
-        is present."""
-        with pytest.raises(NoSuchElementException):
-            self.driver.find_element_by_css_selector(css_selector)
-
-    def fill_in_and_submit_form(self, fields, submit):
-        for field_css, field_text in fields.items():
-            self.fill_in_text_input_by_css(field_css, field_text)
-        self.click_element_with_css(submit)
-
-    def click_element_with_css(self, selector):
-        element = self.driver.find_element_by_css_selector(selector)
-        element.click()
-
-    def fill_in_text_input_by_css(self, input_css, input_text):
-        input_element = self.driver.find_element_by_css_selector(input_css)
-        input_element.send_keys(input_text)
-
-    def check_flashed_message(self, message, category):
-        category = flash_bootstrap_category(category)
-        selector = 'div.alert.alert-{0}'.format(category)
-        elements = self.driver.find_elements_by_css_selector(selector)
-        assert any(message in e.text for e in elements)
-
-    def open_new_window(self, url):
-        script = "$(window.open('{0}'))".format(url)
-        self.driver.execute_script(script)
-
-    def test_feedback(self):
-        self.driver.get(self.get_url('/'))
-        self.click_element_with_css('#feedback-link')
-        self.wait_for_element_to_be_clickable('#feedback_submit_button')
-        feedback = {'#feedback_email': "example_user@example.com",
-                    '#feedback_name': "Avid User",
-                    '#feedback_text': "I hope your feedback form works."}
-        self.fill_in_and_submit_form(feedback, '#feedback_submit_button')
-        self.check_flashed_message("Thanks for your feedback!", 'info')
-
-    def test_server_is_up_and_running(self):
-        response = urllib.request.urlopen(self.get_url('/'))
-        assert response.code == 200
-
-    def test_frontpage_links(self):
-        """ Just make sure we can go to the front page and that
-        the main menu is there and has at least one item."""
-        self.driver.get(self.get_url('/'))
-        main_menu_css = 'nav .container #navbar ul li'
-        self.assertCssSelectorExists(main_menu_css)
-
-def test_our_server():  #pragma: no cover
-    basic = BasicFunctionalityTests()
-    basic.start_driver()
+# Note, we could write these additional assert methods in a class which
+# inherits from webdriver.PhantomJS, however if we did that it would be more
+# awkward to allow choosing a different web driver. Since we only have a couple
+# of these I've opted for greater flexibility.
+def assertCssSelectorExists(driver, css_selector):
+    """ Asserts that there is an element that matches the given
+    css selector."""
+    # We do not actually need to do anything special here, if the
+    # element does not exist we fill fail with a NoSuchElementException
+    # however we wrap this up in a pytest.fail because the error message
+    # is then a bit nicer to read.
     try:
-        basic.test_server_is_up_and_running()
-        basic.test_frontpage_links()
-        basic.test_feedback()
-    finally:
-        basic.driver.get(basic.get_url('shutdown'))
-        basic.quit_driver()
+        driver.find_element_by_css_selector(css_selector)
+    except NoSuchElementException:
+        pytest.fail("Element {0} not found!".format(css_selector))
+
+
+def assertCssSelectorNotExists(driver, css_selector):
+    """ Asserts that no element that matches the given css selector
+    is present."""
+    with pytest.raises(NoSuchElementException):
+        driver.find_element_by_css_selector(css_selector)
+
+def wait_for_element_to_be_clickable(driver, selector):
+    wait = WebDriverWait(driver, 5)
+    element_spec = (By.CSS_SELECTOR, selector)
+    condition = expected_conditions.element_to_be_clickable(element_spec)
+    element = wait.until(condition)
+    return element
+
+def click_element_with_css(driver, selector):
+    element = driver.find_element_by_css_selector(selector)
+    element.click()
+
+def fill_in_text_input_by_css(driver, input_css, input_text):
+    input_element = driver.find_element_by_css_selector(input_css)
+    input_element.send_keys(input_text)
+
+def fill_in_and_submit_form(driver, fields, submit):
+    for field_css, field_text in fields.items():
+        fill_in_text_input_by_css(driver, field_css, field_text)
+    click_element_with_css(driver, submit)
+
+def check_flashed_message(driver, message, category):
+    category = flash_bootstrap_category(category)
+    selector = 'div.alert.alert-{0}'.format(category)
+    elements = driver.find_elements_by_css_selector(selector)
+    if category == 'error':
+        print("error: messages:")
+        for e in elements:
+            print(e.text)
+    assert any(message in e.text for e in elements)
+
+def test_frontpage_loads(driver):
+    """ Just make sure we can go to the front page and that
+    the main menu is there and has at least one item."""
+    driver.get(get_url())
+    main_menu_css = 'nav .container #navbar'
+    assertCssSelectorExists(driver, main_menu_css)
+
+def test_feedback(driver):
+    """Tests the feedback mechanism."""
+    driver.get(get_url())
+    wait_for_element_to_be_clickable(driver, '#feedback-link')
+    click_element_with_css(driver, '#feedback-link')
+    wait_for_element_to_be_clickable(driver, '#feedback_submit_button')
+    feedback = {'#feedback_email': "example_user@example.com",
+                '#feedback_name': "Avid User",
+                '#feedback_text': "I hope your feedback form works."}
+    fill_in_and_submit_form(driver, feedback, '#feedback_submit_button')
+    check_flashed_message(driver, "Thanks for your feedback!", 'info')
+

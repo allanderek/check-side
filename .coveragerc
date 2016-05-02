@@ -1,0 +1,13 @@
+[run]
+branch = True
+parallel = False
+source =
+    app/
+
+[report]
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    assert False
+    if 0:
+    if __name__ == .__main__.:
